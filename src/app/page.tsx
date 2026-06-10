@@ -12,6 +12,7 @@ type SortKey =
   | "name"
   | "totaalscore"
   | "rating"
+  | "reviews"
   | "performance"
   | "seo"
   | "accessibility";
@@ -19,12 +20,20 @@ type SortKey =
 interface ColumnDef {
   key: SortKey;
   label: string;
+  /** Optionele tooltip op de kolomkop. */
+  title?: string;
 }
 
 const SORTABLE_COLUMNS: ColumnDef[] = [
   { key: "name", label: "Naam" },
   { key: "totaalscore", label: "Totaalscore" },
   { key: "rating", label: "Google-rating" },
+  {
+    key: "reviews",
+    label: "Mogelijk jong",
+    title:
+      "Ruwe schatting op basis van aantal reviews — geen oprichtingsdatum. Verifieer handmatig (bv. via KvK of LinkedIn) voordat je hierop afgaat.",
+  },
   { key: "performance", label: "Perf." },
   { key: "seo", label: "SEO" },
   { key: "accessibility", label: "Toegank." },
@@ -39,6 +48,9 @@ function sortValue(r: LeadResult, key: SortKey): number | string {
       return r.assessment.totaalscore;
     case "rating":
       return r.rating ?? -1;
+    case "reviews":
+      // Minder reviews = mogelijk jonger → sorteer op aantal reviews.
+      return r.userRatingsTotal ?? -1;
     case "performance":
       return r.assessment.performance ?? -1;
     case "seo":
@@ -62,6 +74,36 @@ function scoreBadge(score: number): string {
   return "bg-green-500/15 text-green-400 border-green-500/30";
 }
 
+/**
+ * RUWE leeftijds-proxy op basis van het aantal Google-reviews. Dit is GEEN
+ * oprichtingsdatum — alleen een zwakke hint om op te prioriteren.
+ *   < 10  → mogelijk jong/nieuw
+ *   10-40 → gevestigd-ish
+ *   > 40  → waarschijnlijk gevestigd
+ * Bedrijven zonder reviews krijgen "geen reviews" (ook een zwak jong-signaal).
+ */
+function ageHint(reviews: number | null): { label: string; className: string } {
+  if (reviews === null || reviews === 0)
+    return {
+      label: "geen reviews",
+      className: "bg-accent/15 text-accent border-accent/30",
+    };
+  if (reviews < 10)
+    return {
+      label: "mogelijk jong/nieuw",
+      className: "bg-accent/15 text-accent border-accent/30",
+    };
+  if (reviews <= 40)
+    return {
+      label: "gevestigd-ish",
+      className: "bg-slate-500/15 text-slate-300 border-slate-500/30",
+    };
+  return {
+    label: "waarschijnlijk gevestigd",
+    className: "bg-slate-600/15 text-slate-400 border-slate-600/30",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Hoofdpagina
 // ---------------------------------------------------------------------------
@@ -70,6 +112,10 @@ export default function Home() {
   const [branche, setBranche] = useState("");
   const [max, setMax] = useState(20);
   const [maxScore, setMaxScore] = useState<string>("");
+
+  // Optioneel filter: toon alleen bedrijven met < X reviews (client-side).
+  const [onlyFewReviews, setOnlyFewReviews] = useState(false);
+  const [fewReviewsThreshold, setFewReviewsThreshold] = useState(10);
 
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
@@ -110,7 +156,11 @@ export default function Home() {
   }, []);
 
   const sortedResults = useMemo(() => {
-    const copy = [...results];
+    // Optioneel: alleen bedrijven met < X reviews (geen reviews telt mee).
+    const filtered = onlyFewReviews
+      ? results.filter((r) => (r.userRatingsTotal ?? 0) < fewReviewsThreshold)
+      : results;
+    const copy = [...filtered];
     copy.sort((a, b) => {
       const va = sortValue(a, sortKey);
       const vb = sortValue(b, sortKey);
@@ -123,7 +173,7 @@ export default function Home() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return copy;
-  }, [results, sortKey, sortDir]);
+  }, [results, sortKey, sortDir, onlyFewReviews, fewReviewsThreshold]);
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) {
@@ -382,16 +432,50 @@ export default function Home() {
       {/* Resultaten */}
       {results.length > 0 && (
         <section className="mt-8">
-          <div className="mb-3 flex items-center justify-between">
+          {/* Eerlijkheids-disclaimer over de hint-signalen. */}
+          <p className="mb-3 rounded-lg border border-navy-600 bg-navy-800/60 px-3 py-2 text-xs text-slate-400">
+            ℹ️ Leeftijds- en B2B-inschatting zijn hulpmiddelen, geen feiten.
+            Gebruik ze om te prioriteren, niet om automatisch te selecteren.
+          </p>
+
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-semibold text-white">
-              {results.length} resultaten
+              {sortedResults.length}
+              {sortedResults.length !== results.length && (
+                <span className="text-slate-500"> / {results.length}</span>
+              )}{" "}
+              resultaten
             </h2>
-            <button
-              onClick={handleDownload}
-              className="rounded-lg border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent transition hover:bg-accent/20"
-            >
-              ⬇ Download CSV
-            </button>
+
+            <div className="flex flex-wrap items-center gap-4">
+              {/* Filter: alleen weinig reviews (mogelijk jongere bedrijven). */}
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={onlyFewReviews}
+                  onChange={(e) => setOnlyFewReviews(e.target.checked)}
+                  className="h-4 w-4 accent-[#06b6d4]"
+                />
+                Toon alleen bedrijven met &lt;
+                <input
+                  type="number"
+                  min={1}
+                  value={fewReviewsThreshold}
+                  onChange={(e) =>
+                    setFewReviewsThreshold(Math.max(1, Number(e.target.value)))
+                  }
+                  className="w-16 rounded border border-navy-600 bg-navy-900 px-2 py-1 text-slate-100 outline-none focus:border-accent"
+                />
+                reviews
+              </label>
+
+              <button
+                onClick={handleDownload}
+                className="rounded-lg border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent transition hover:bg-accent/20"
+              >
+                ⬇ Download CSV
+              </button>
+            </div>
           </div>
 
           <div className="overflow-x-auto rounded-xl border border-navy-600">
@@ -402,6 +486,7 @@ export default function Home() {
                     <SortableTh
                       key={col.key}
                       label={col.label}
+                      title={col.title}
                       active={sortKey === col.key}
                       dir={sortDir}
                       onClick={() => toggleSort(col.key)}
@@ -453,6 +538,22 @@ export default function Home() {
                       ) : (
                         <span className="text-slate-600">—</span>
                       )}
+                    </td>
+                    {/* Mogelijk jong (ruwe proxy o.b.v. aantal reviews) */}
+                    <td className="px-3 py-2">
+                      {(() => {
+                        const hint = ageHint(r.userRatingsTotal);
+                        return (
+                          <span
+                            title={`${
+                              r.userRatingsTotal ?? 0
+                            } reviews — ruwe schatting, geen oprichtingsdatum`}
+                            className={`inline-block whitespace-nowrap rounded border px-2 py-0.5 text-xs font-medium ${hint.className}`}
+                          >
+                            {hint.label}
+                          </span>
+                        );
+                      })()}
                     </td>
                     {/* Performance / SEO / Toegankelijkheid */}
                     <ScoreCell value={r.assessment.performance} />
@@ -568,11 +669,13 @@ function Field({
 
 function SortableTh({
   label,
+  title,
   active,
   dir,
   onClick,
 }: {
   label: string;
+  title?: string;
   active: boolean;
   dir: SortDir;
   onClick: () => void;
@@ -580,7 +683,10 @@ function SortableTh({
   return (
     <th
       onClick={onClick}
-      className="cursor-pointer select-none px-3 py-2 font-medium hover:text-accent"
+      title={title}
+      className={`cursor-pointer select-none px-3 py-2 font-medium hover:text-accent ${
+        title ? "underline decoration-dotted underline-offset-4" : ""
+      }`}
     >
       <span className="inline-flex items-center gap-1">
         {label}

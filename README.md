@@ -104,14 +104,29 @@ de scan niet crashen — dat bedrijf wordt gemarkeerd en de scan gaat door.
   Score is gekleurd (rood < 50, oranje 50–70, groen > 70). Elke kolomkop met een
   ↕-pijl is klikbaar sorteerbaar. Bedrijven zonder website tonen **GEEN
   WEBSITE** als sterkste lead.
+- **Kolom "Mogelijk jong"**: een ruwe leeftijds-proxy op basis van het aantal
+  Google-reviews (`< 10` → *mogelijk jong/nieuw*, `10–40` → *gevestigd-ish*,
+  `> 40` → *waarschijnlijk gevestigd*). Sorteerbaar, zodat je mogelijk-jongere
+  bedrijven bovenaan kunt zetten. **Dit is geen oprichtingsdatum** — alleen een
+  hint om op te prioriteren; verifieer handmatig (KvK/LinkedIn).
+- **Filter "alleen weinig reviews"**: een checkbox boven de tabel met een
+  instelbaar getal (default 10) om snel waarschijnlijk-jongere bedrijven te
+  isoleren. Dit filtert client-side de getoonde rijen (en dus ook de CSV-export).
 - **Download CSV**: exporteert de huidige (gefilterde/gesorteerde) tabel met
   UTF-8 BOM, zodat Excel Nederlandse tekens goed toont.
+
+> De B2B-richting stuur je zelf via je zoekterm (bv. *"facility schoonmaak
+> zakelijk"* i.p.v. *"schoonmaak"*) — daar is geen aparte instelling voor.
 
 ## Belangrijke caveats
 
 - **Google levert geen e-mailadressen.** Die worden van de site geschraapt en
   lukken bij ~50–70%.
 - **"Lelijk design" wordt niet gemeten** — alleen meetbare technische signalen.
+- **Leeftijds-/B2B-inschatting zijn ruwe proxies, geen feiten.** De
+  "Mogelijk jong"-hint is afgeleid van het aantal reviews, niet van een
+  oprichtingsdatum. Gebruik het om te prioriteren, niet om automatisch te
+  selecteren.
 - Bedoeld voor **gerichte, warme B2B-benadering**, niet voor massale koude mail
   (denk aan AVG/GDPR).
 
