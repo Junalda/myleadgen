@@ -1,0 +1,60 @@
+// Gedeelde types voor de business/result objecten.
+
+/** Basisgegevens van een bedrijf zoals geleverd door Google Places. */
+export interface Business {
+  placeId: string;
+  name: string;
+  address: string;
+  phone: string;
+  /** Website-URL (lege string als Google er geen kent). */
+  website: string;
+  /** Google Maps link naar het bedrijf. */
+  googleUrl: string;
+  rating: number | null;
+  userRatingsTotal: number | null;
+}
+
+/** Resultaat van het schrapen van contactgegevens van de website. */
+export interface ContactInfo {
+  emails: string[];
+  contactPage: string | null;
+}
+
+/** Uitgebreide beoordeling van de website. */
+export interface Assessment {
+  /** Heeft de site een website om te beoordelen? */
+  hasWebsite: boolean;
+  https: boolean;
+  sslValid: boolean;
+  reachable: boolean;
+  hasTitle: boolean;
+  hasMetaDescription: boolean;
+  /** viewport-meta aanwezig => mobiel-responsief signaal. */
+  hasViewport: boolean;
+  // Lighthouse-scores (0-100) of null als PSI faalde.
+  performance: number | null;
+  seo: number | null;
+  accessibility: number | null;
+  bestPractices: number | null;
+  /** Of de PageSpeed Insights call gelukt is. */
+  psiOk: boolean;
+  /** Totaalscore 0-100 (lager = zwakkere site = betere lead). */
+  totaalscore: number;
+  /** Leesbare lijst met zwaktes. */
+  zwaktes: string[];
+}
+
+/** Het volledige lead-resultaat dat naar de frontend gaat. */
+export interface LeadResult extends Business {
+  emails: string[];
+  contactPage: string | null;
+  assessment: Assessment;
+}
+
+/** Server-Sent-Events die de scan-route naar de frontend streamt. */
+export type ScanEvent =
+  | { type: "total"; total: number }
+  | { type: "progress"; done: number; total: number }
+  | { type: "result"; result: LeadResult }
+  | { type: "error"; message: string; fatal: boolean }
+  | { type: "done" };
