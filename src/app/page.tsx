@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { LeadResult, ScanEvent } from "@/lib/types";
 import { downloadCsv } from "@/lib/csv";
 
@@ -12,6 +12,7 @@ type SortKey =
   | "name"
   | "totaalscore"
   | "rating"
+  | "reviews"
   | "performance"
   | "seo"
   | "accessibility";
@@ -19,12 +20,20 @@ type SortKey =
 interface ColumnDef {
   key: SortKey;
   label: string;
+  /** Optionele tooltip op de kolomkop. */
+  title?: string;
 }
 
 const SORTABLE_COLUMNS: ColumnDef[] = [
   { key: "name", label: "Naam" },
   { key: "totaalscore", label: "Totaalscore" },
   { key: "rating", label: "Google-rating" },
+  {
+    key: "reviews",
+    label: "Mogelijk jong",
+    title:
+      "Ruwe schatting op basis van aantal reviews — geen oprichtingsdatum. Verifieer handmatig (bv. via KvK of LinkedIn) voordat je hierop afgaat.",
+  },
   { key: "performance", label: "Perf." },
   { key: "seo", label: "SEO" },
   { key: "accessibility", label: "Toegank." },
@@ -39,6 +48,9 @@ function sortValue(r: LeadResult, key: SortKey): number | string {
       return r.assessment.totaalscore;
     case "rating":
       return r.rating ?? -1;
+    case "reviews":
+      // Minder reviews = mogelijk jonger → sorteer op aantal reviews.
+      return r.userRatingsTotal ?? -1;
     case "performance":
       return r.assessment.performance ?? -1;
     case "seo":
@@ -62,6 +74,36 @@ function scoreBadge(score: number): string {
   return "bg-green-500/15 text-green-400 border-green-500/30";
 }
 
+/**
+ * RUWE leeftijds-proxy op basis van het aantal Google-reviews. Dit is GEEN
+ * oprichtingsdatum — alleen een zwakke hint om op te prioriteren.
+ *   < 10  → mogelijk jong/nieuw
+ *   10-40 → gevestigd-ish
+ *   > 40  → waarschijnlijk gevestigd
+ * Bedrijven zonder reviews krijgen "geen reviews" (ook een zwak jong-signaal).
+ */
+function ageHint(reviews: number | null): { label: string; className: string } {
+  if (reviews === null || reviews === 0)
+    return {
+      label: "geen reviews",
+      className: "bg-accent/15 text-accent border-accent/30",
+    };
+  if (reviews < 10)
+    return {
+      label: "mogelijk jong/nieuw",
+      className: "bg-accent/15 text-accent border-accent/30",
+    };
+  if (reviews <= 40)
+    return {
+      label: "gevestigd-ish",
+      className: "bg-slate-500/15 text-slate-300 border-slate-500/30",
+    };
+  return {
+    label: "waarschijnlijk gevestigd",
+    className: "bg-slate-600/15 text-slate-400 border-slate-600/30",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Hoofdpagina
 // ---------------------------------------------------------------------------
@@ -71,17 +113,54 @@ export default function Home() {
   const [max, setMax] = useState(20);
   const [maxScore, setMaxScore] = useState<string>("");
 
+  // Optioneel filter: toon alleen bedrijven met < X reviews (client-side).
+  const [onlyFewReviews, setOnlyFewReviews] = useState(false);
+  const [fewReviewsThreshold, setFewReviewsThreshold] = useState(10);
+
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [results, setResults] = useState<LeadResult[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  // Status van de server-side API-keys (alleen booleans, nooit de keys zelf).
+  const [keyStatus, setKeyStatus] = useState<{
+    placesKey: boolean;
+    psiKey: boolean;
+  } | null>(null);
+
   // Standaard sorteren op totaalscore oplopend (zwakste site bovenaan).
   const [sortKey, setSortKey] = useState<SortKey>("totaalscore");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
 
+  // Bij laden: check of de keys server-side aanwezig zijn, zodat we een
+  // duidelijke melding kunnen tonen i.p.v. pas te falen bij het scannen.
+  // Faalt deze check, dan laten we de UI gewoon werken (geen blokkade).
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/health")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelled && data) {
+          setKeyStatus({
+            placesKey: !!data.placesKey,
+            psiKey: !!data.psiKey,
+          });
+        }
+      })
+      .catch(() => {
+        /* health-check mislukt: stil negeren, formulier blijft werken */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const sortedResults = useMemo(() => {
-    const copy = [...results];
+    // Optioneel: alleen bedrijven met < X reviews (geen reviews telt mee).
+    const filtered = onlyFewReviews
+      ? results.filter((r) => (r.userRatingsTotal ?? 0) < fewReviewsThreshold)
+      : results;
+    const copy = [...filtered];
     copy.sort((a, b) => {
       const va = sortValue(a, sortKey);
       const vb = sortValue(b, sortKey);
@@ -94,7 +173,7 @@ export default function Home() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return copy;
-  }, [results, sortKey, sortDir]);
+  }, [results, sortKey, sortDir, onlyFewReviews, fewReviewsThreshold]);
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) {
@@ -167,9 +246,13 @@ export default function Home() {
         }
       }
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Onbekende fout tijdens de scan."
-      );
+      // Browsers gooien "TypeError: Failed to fetch" als de server niet
+      // bereikbaar is — vertaal dat naar iets waar je wat mee kunt.
+      const raw = err instanceof Error ? err.message : "";
+      const friendly = /failed to fetch|networkerror|load failed/i.test(raw)
+        ? "Kon de server niet bereiken. Draait de dev-server nog? Start hem met `npm run dev` en probeer opnieuw."
+        : raw || "Onbekende fout tijdens de scan.";
+      setError(friendly);
     } finally {
       setScanning(false);
     }
@@ -219,6 +302,39 @@ export default function Home() {
           exporteer warme leads.
         </p>
       </header>
+
+      {/* Waarschuwing als de server-side API-keys ontbreken. */}
+      {keyStatus && (!keyStatus.placesKey || !keyStatus.psiKey) && (
+        <div className="mb-6 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          <p className="font-semibold">⚠️ Google API-keys ontbreken</p>
+          <p className="mt-1 text-amber-200/90">
+            {!keyStatus.placesKey && (
+              <>
+                <code className="rounded bg-navy-900 px-1">
+                  GOOGLE_PLACES_KEY
+                </code>{" "}
+                is niet ingesteld
+                {!keyStatus.psiKey ? " " : "."}
+              </>
+            )}
+            {!keyStatus.psiKey && (
+              <>
+                {!keyStatus.placesKey && "en "}
+                <code className="rounded bg-navy-900 px-1">
+                  GOOGLE_PSI_KEY
+                </code>{" "}
+                is niet ingesteld.
+              </>
+            )}{" "}
+            Zet ze in een{" "}
+            <code className="rounded bg-navy-900 px-1">.env.local</code>-bestand
+            in de projectmap en herstart de dev-server (
+            <code className="rounded bg-navy-900 px-1">npm run dev</code>).
+            Zonder Places-key kan er niet gescand worden; zonder PSI-key vallen
+            de scores terug op een basis-beoordeling.
+          </p>
+        </div>
+      )}
 
       {/* Formulier */}
       <form
@@ -316,16 +432,50 @@ export default function Home() {
       {/* Resultaten */}
       {results.length > 0 && (
         <section className="mt-8">
-          <div className="mb-3 flex items-center justify-between">
+          {/* Eerlijkheids-disclaimer over de hint-signalen. */}
+          <p className="mb-3 rounded-lg border border-navy-600 bg-navy-800/60 px-3 py-2 text-xs text-slate-400">
+            ℹ️ Leeftijds- en B2B-inschatting zijn hulpmiddelen, geen feiten.
+            Gebruik ze om te prioriteren, niet om automatisch te selecteren.
+          </p>
+
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-semibold text-white">
-              {results.length} resultaten
+              {sortedResults.length}
+              {sortedResults.length !== results.length && (
+                <span className="text-slate-500"> / {results.length}</span>
+              )}{" "}
+              resultaten
             </h2>
-            <button
-              onClick={handleDownload}
-              className="rounded-lg border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent transition hover:bg-accent/20"
-            >
-              ⬇ Download CSV
-            </button>
+
+            <div className="flex flex-wrap items-center gap-4">
+              {/* Filter: alleen weinig reviews (mogelijk jongere bedrijven). */}
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={onlyFewReviews}
+                  onChange={(e) => setOnlyFewReviews(e.target.checked)}
+                  className="h-4 w-4 accent-[#06b6d4]"
+                />
+                Toon alleen bedrijven met &lt;
+                <input
+                  type="number"
+                  min={1}
+                  value={fewReviewsThreshold}
+                  onChange={(e) =>
+                    setFewReviewsThreshold(Math.max(1, Number(e.target.value)))
+                  }
+                  className="w-16 rounded border border-navy-600 bg-navy-900 px-2 py-1 text-slate-100 outline-none focus:border-accent"
+                />
+                reviews
+              </label>
+
+              <button
+                onClick={handleDownload}
+                className="rounded-lg border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent transition hover:bg-accent/20"
+              >
+                ⬇ Download CSV
+              </button>
+            </div>
           </div>
 
           <div className="overflow-x-auto rounded-xl border border-navy-600">
@@ -336,6 +486,7 @@ export default function Home() {
                     <SortableTh
                       key={col.key}
                       label={col.label}
+                      title={col.title}
                       active={sortKey === col.key}
                       dir={sortDir}
                       onClick={() => toggleSort(col.key)}
@@ -387,6 +538,22 @@ export default function Home() {
                       ) : (
                         <span className="text-slate-600">—</span>
                       )}
+                    </td>
+                    {/* Mogelijk jong (ruwe proxy o.b.v. aantal reviews) */}
+                    <td className="px-3 py-2">
+                      {(() => {
+                        const hint = ageHint(r.userRatingsTotal);
+                        return (
+                          <span
+                            title={`${
+                              r.userRatingsTotal ?? 0
+                            } reviews — ruwe schatting, geen oprichtingsdatum`}
+                            className={`inline-block whitespace-nowrap rounded border px-2 py-0.5 text-xs font-medium ${hint.className}`}
+                          >
+                            {hint.label}
+                          </span>
+                        );
+                      })()}
                     </td>
                     {/* Performance / SEO / Toegankelijkheid */}
                     <ScoreCell value={r.assessment.performance} />
@@ -502,11 +669,13 @@ function Field({
 
 function SortableTh({
   label,
+  title,
   active,
   dir,
   onClick,
 }: {
   label: string;
+  title?: string;
   active: boolean;
   dir: SortDir;
   onClick: () => void;
@@ -514,7 +683,10 @@ function SortableTh({
   return (
     <th
       onClick={onClick}
-      className="cursor-pointer select-none px-3 py-2 font-medium hover:text-accent"
+      title={title}
+      className={`cursor-pointer select-none px-3 py-2 font-medium hover:text-accent ${
+        title ? "underline decoration-dotted underline-offset-4" : ""
+      }`}
     >
       <span className="inline-flex items-center gap-1">
         {label}
