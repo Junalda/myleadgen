@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { LeadResult, ScanEvent } from "@/lib/types";
 import { downloadCsv } from "@/lib/csv";
 
@@ -76,9 +76,38 @@ export default function Home() {
   const [results, setResults] = useState<LeadResult[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  // Status van de server-side API-keys (alleen booleans, nooit de keys zelf).
+  const [keyStatus, setKeyStatus] = useState<{
+    placesKey: boolean;
+    psiKey: boolean;
+  } | null>(null);
+
   // Standaard sorteren op totaalscore oplopend (zwakste site bovenaan).
   const [sortKey, setSortKey] = useState<SortKey>("totaalscore");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+
+  // Bij laden: check of de keys server-side aanwezig zijn, zodat we een
+  // duidelijke melding kunnen tonen i.p.v. pas te falen bij het scannen.
+  // Faalt deze check, dan laten we de UI gewoon werken (geen blokkade).
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/health")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelled && data) {
+          setKeyStatus({
+            placesKey: !!data.placesKey,
+            psiKey: !!data.psiKey,
+          });
+        }
+      })
+      .catch(() => {
+        /* health-check mislukt: stil negeren, formulier blijft werken */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const sortedResults = useMemo(() => {
     const copy = [...results];
@@ -167,9 +196,13 @@ export default function Home() {
         }
       }
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Onbekende fout tijdens de scan."
-      );
+      // Browsers gooien "TypeError: Failed to fetch" als de server niet
+      // bereikbaar is — vertaal dat naar iets waar je wat mee kunt.
+      const raw = err instanceof Error ? err.message : "";
+      const friendly = /failed to fetch|networkerror|load failed/i.test(raw)
+        ? "Kon de server niet bereiken. Draait de dev-server nog? Start hem met `npm run dev` en probeer opnieuw."
+        : raw || "Onbekende fout tijdens de scan.";
+      setError(friendly);
     } finally {
       setScanning(false);
     }
@@ -219,6 +252,39 @@ export default function Home() {
           exporteer warme leads.
         </p>
       </header>
+
+      {/* Waarschuwing als de server-side API-keys ontbreken. */}
+      {keyStatus && (!keyStatus.placesKey || !keyStatus.psiKey) && (
+        <div className="mb-6 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          <p className="font-semibold">⚠️ Google API-keys ontbreken</p>
+          <p className="mt-1 text-amber-200/90">
+            {!keyStatus.placesKey && (
+              <>
+                <code className="rounded bg-navy-900 px-1">
+                  GOOGLE_PLACES_KEY
+                </code>{" "}
+                is niet ingesteld
+                {!keyStatus.psiKey ? " " : "."}
+              </>
+            )}
+            {!keyStatus.psiKey && (
+              <>
+                {!keyStatus.placesKey && "en "}
+                <code className="rounded bg-navy-900 px-1">
+                  GOOGLE_PSI_KEY
+                </code>{" "}
+                is niet ingesteld.
+              </>
+            )}{" "}
+            Zet ze in een{" "}
+            <code className="rounded bg-navy-900 px-1">.env.local</code>-bestand
+            in de projectmap en herstart de dev-server (
+            <code className="rounded bg-navy-900 px-1">npm run dev</code>).
+            Zonder Places-key kan er niet gescand worden; zonder PSI-key vallen
+            de scores terug op een basis-beoordeling.
+          </p>
+        </div>
+      )}
 
       {/* Formulier */}
       <form
