@@ -34,22 +34,23 @@ export function buildCsv(rows: LeadResult[]): string {
   lines.push(HEADERS.map(escapeCell).join(","));
 
   for (const r of rows) {
+    // Assessment kan null zijn als de beoordeling nog niet binnen is.
     const a = r.assessment;
     lines.push(
       [
         escapeCell(r.name),
-        escapeCell(a.totaalscore),
-        escapeCell(a.zwaktes.join("; ")),
+        escapeCell(a ? a.totaalscore : ""),
+        escapeCell(a ? a.zwaktes.join("; ") : ""),
         escapeCell(r.website),
         escapeCell(r.emails.join("; ")),
         escapeCell(r.phone),
         escapeCell(r.contactPage),
         escapeCell(r.rating),
         escapeCell(r.userRatingsTotal),
-        escapeCell(a.performance),
-        escapeCell(a.seo),
-        escapeCell(a.accessibility),
-        escapeCell(a.bestPractices),
+        escapeCell(a ? a.performance : ""),
+        escapeCell(a ? a.seo : ""),
+        escapeCell(a ? a.accessibility : ""),
+        escapeCell(a ? a.bestPractices : ""),
         escapeCell(r.address),
       ].join(",")
     );

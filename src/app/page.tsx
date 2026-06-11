@@ -41,22 +41,24 @@ const SORTABLE_COLUMNS: ColumnDef[] = [
 
 /** Haal de sorteerwaarde voor een kolom uit een lead. */
 function sortValue(r: LeadResult, key: SortKey): number | string {
+  const a = r.assessment;
   switch (key) {
     case "name":
       return r.name.toLowerCase();
     case "totaalscore":
-      return r.assessment.totaalscore;
+      // Nog niet beoordeeld → sorteer onderaan (hoge waarde).
+      return a ? a.totaalscore : 9999;
     case "rating":
       return r.rating ?? -1;
     case "reviews":
       // Minder reviews = mogelijk jonger → sorteer op aantal reviews.
       return r.userRatingsTotal ?? -1;
     case "performance":
-      return r.assessment.performance ?? -1;
+      return a?.performance ?? -1;
     case "seo":
-      return r.assessment.seo ?? -1;
+      return a?.seo ?? -1;
     case "accessibility":
-      return r.assessment.accessibility ?? -1;
+      return a?.accessibility ?? -1;
   }
 }
 
@@ -155,11 +157,25 @@ export default function Home() {
     };
   }, []);
 
+  const maxScoreNum =
+    maxScore.trim() === "" ? null : Number(maxScore);
+
   const sortedResults = useMemo(() => {
-    // Optioneel: alleen bedrijven met < X reviews (geen reviews telt mee).
-    const filtered = onlyFewReviews
-      ? results.filter((r) => (r.userRatingsTotal ?? 0) < fewReviewsThreshold)
-      : results;
+    const filtered = results.filter((r) => {
+      // Optioneel: alleen bedrijven met < X reviews (geen reviews telt mee).
+      if (onlyFewReviews && (r.userRatingsTotal ?? 0) >= fewReviewsThreshold)
+        return false;
+      // Max score-filter (client-side): nog niet-beoordeelde leads blijven
+      // zichtbaar tot hun score binnen is; daarna pas verbergen indien te hoog.
+      if (
+        maxScoreNum !== null &&
+        !Number.isNaN(maxScoreNum) &&
+        r.assessment !== null &&
+        r.assessment.totaalscore > maxScoreNum
+      )
+        return false;
+      return true;
+    });
     const copy = [...filtered];
     copy.sort((a, b) => {
       const va = sortValue(a, sortKey);
@@ -173,7 +189,14 @@ export default function Home() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return copy;
-  }, [results, sortKey, sortDir, onlyFewReviews, fewReviewsThreshold]);
+  }, [
+    results,
+    sortKey,
+    sortDir,
+    onlyFewReviews,
+    fewReviewsThreshold,
+    maxScoreNum,
+  ]);
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) {
@@ -268,6 +291,21 @@ export default function Home() {
         break;
       case "result":
         setResults((prev) => [...prev, event.result]);
+        break;
+      case "update":
+        // Verrijk de bestaande rij (contact + websitebeoordeling).
+        setResults((prev) =>
+          prev.map((r) =>
+            r.placeId === event.placeId
+              ? {
+                  ...r,
+                  emails: event.emails,
+                  contactPage: event.contactPage,
+                  assessment: event.assessment,
+                }
+              : r
+          )
+        );
         break;
       case "error":
         setError(event.message);
@@ -511,7 +549,11 @@ export default function Home() {
                     </td>
                     {/* Totaalscore */}
                     <td className="px-3 py-2">
-                      {r.assessment.hasWebsite ? (
+                      {r.assessment === null ? (
+                        <span className="inline-block animate-pulse whitespace-nowrap rounded border border-navy-600 bg-navy-700 px-2 py-0.5 text-xs text-slate-400">
+                          ⏳ beoordelen…
+                        </span>
+                      ) : r.assessment.hasWebsite ? (
                         <span
                           className={`inline-block rounded border px-2 py-0.5 font-semibold ${scoreBadge(
                             r.assessment.totaalscore
@@ -556,13 +598,13 @@ export default function Home() {
                       })()}
                     </td>
                     {/* Performance / SEO / Toegankelijkheid */}
-                    <ScoreCell value={r.assessment.performance} />
-                    <ScoreCell value={r.assessment.seo} />
-                    <ScoreCell value={r.assessment.accessibility} />
+                    <ScoreCell value={r.assessment?.performance ?? null} />
+                    <ScoreCell value={r.assessment?.seo ?? null} />
+                    <ScoreCell value={r.assessment?.accessibility ?? null} />
                     {/* Zwaktes */}
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap gap-1">
-                        {r.assessment.zwaktes.map((z, i) => (
+                        {(r.assessment?.zwaktes ?? []).map((z, i) => (
                           <span
                             key={i}
                             className="rounded bg-navy-600 px-1.5 py-0.5 text-xs text-slate-300"
