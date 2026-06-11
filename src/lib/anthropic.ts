@@ -18,8 +18,19 @@ export class AnthropicFatalError extends Error {}
 
 let client: Anthropic | null = null;
 
+/**
+ * Lees en NORMALISEER de key: strip omringende quotes en witruimte/newlines.
+ * Dat zijn veelvoorkomende copy-paste-ongelukjes (zeker in Vercel-env-velden)
+ * die anders een "invalid x-api-key" (401) veroorzaken.
+ */
+function readKey(): string | undefined {
+  const raw = process.env.ANTHROPIC_API_KEY;
+  if (!raw) return undefined;
+  return raw.trim().replace(/^["']|["']$/g, "").trim();
+}
+
 function getClient(): Anthropic {
-  const key = process.env.ANTHROPIC_API_KEY;
+  const key = readKey();
   if (!key) {
     throw new AnthropicConfigError(
       "ANTHROPIC_API_KEY ontbreekt. Zet hem in .env.local (zie console.anthropic.com)."
@@ -44,7 +55,7 @@ export function anthropicKeyFormat():
   | "placeholder"
   | "unexpected_prefix"
   | "ok" {
-  const key = process.env.ANTHROPIC_API_KEY;
+  const key = readKey();
   if (!key) return "missing";
   if (/your-|placeholder|xxxx/i.test(key)) return "placeholder";
   if (!key.startsWith("sk-ant-")) return "unexpected_prefix";
