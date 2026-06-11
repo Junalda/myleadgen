@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { LeadResult, ScanEvent } from "@/lib/types";
+import type {
+  EnrichEvent,
+  EnrichInput,
+  LeadResult,
+  ScanEvent,
+} from "@/lib/types";
 import { downloadCsv } from "@/lib/csv";
 import { linkedinSearchUrl } from "@/lib/linkedin";
 
@@ -16,7 +21,8 @@ type SortKey =
   | "reviews"
   | "performance"
   | "seo"
-  | "accessibility";
+  | "accessibility"
+  | "benaderbaar";
 
 interface ColumnDef {
   key: SortKey;
@@ -38,6 +44,12 @@ const SORTABLE_COLUMNS: ColumnDef[] = [
   { key: "performance", label: "Perf." },
   { key: "seo", label: "SEO" },
   { key: "accessibility", label: "Toegank." },
+  {
+    key: "benaderbaar",
+    label: "Benaderbaar",
+    title:
+      "AI-inschatting (Claude) op basis van beperkte scan-data — geen feit. Verifieer omvang/situatie zelf.",
+  },
 ];
 
 /** Haal de sorteerwaarde voor een kolom uit een lead. */
@@ -60,6 +72,10 @@ function sortValue(r: LeadResult, key: SortKey): number | string {
       return a?.seo ?? -1;
     case "accessibility":
       return a?.accessibility ?? -1;
+    case "benaderbaar":
+      // Benaderbaar bovenaan (desc): ja=2, nee=1, nog niet verwerkt=0.
+      if (!r.enrichment) return 0;
+      return r.enrichment.benaderbaar ? 2 : 1;
   }
 }
 
@@ -119,16 +135,25 @@ export default function Home() {
   // Optioneel filter: toon alleen bedrijven met < X reviews (client-side).
   const [onlyFewReviews, setOnlyFewReviews] = useState(false);
   const [fewReviewsThreshold, setFewReviewsThreshold] = useState(10);
+  // Optioneel filter: toon alleen door Claude als benaderbaar beoordeelde leads.
+  const [onlyBenaderbaar, setOnlyBenaderbaar] = useState(false);
 
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [results, setResults] = useState<LeadResult[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  // Claude-verrijking (lead-filtering + berichtgeneratie).
+  const [enriching, setEnriching] = useState(false);
+  const [enrichProgress, setEnrichProgress] = useState({ done: 0, total: 0 });
+  const [enrichError, setEnrichError] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
   // Status van de server-side API-keys (alleen booleans, nooit de keys zelf).
   const [keyStatus, setKeyStatus] = useState<{
     placesKey: boolean;
     psiKey: boolean;
+    anthropicKey: boolean;
   } | null>(null);
 
   // Standaard sorteren op totaalscore oplopend (zwakste site bovenaan).
@@ -147,6 +172,7 @@ export default function Home() {
           setKeyStatus({
             placesKey: !!data.placesKey,
             psiKey: !!data.psiKey,
+            anthropicKey: !!data.anthropicKey,
           });
         }
       })
@@ -175,6 +201,8 @@ export default function Home() {
         r.assessment.totaalscore > maxScoreNum
       )
         return false;
+      // Optioneel: alleen door Claude als benaderbaar beoordeelde leads.
+      if (onlyBenaderbaar && !r.enrichment?.benaderbaar) return false;
       return true;
     });
     const copy = [...filtered];
@@ -197,6 +225,7 @@ export default function Home() {
     onlyFewReviews,
     fewReviewsThreshold,
     maxScoreNum,
+    onlyBenaderbaar,
   ]);
 
   function toggleSort(key: SortKey) {
@@ -327,6 +356,118 @@ export default function Home() {
     );
   }
 
+  // Roept /api/enrich aan voor de huidige (gefilterde) lijst en streamt de
+  // benaderbaarheid-inschatting + conceptberichten terug.
+  async function runEnrich() {
+    if (enriching || sortedResults.length === 0) return;
+    setEnrichError(null);
+    setEnrichProgress({ done: 0, total: sortedResults.length });
+    setEnriching(true);
+
+    // Bouw de input (incl. LinkedIn-zoeklink) voor de getoonde bedrijven.
+    const businesses: EnrichInput[] = sortedResults.map((r) => ({
+      placeId: r.placeId,
+      name: r.name,
+      website: r.website,
+      totaalscore: r.assessment?.totaalscore ?? null,
+      zwaktes: r.assessment?.zwaktes ?? [],
+      phone: r.phone,
+      email: r.emails[0] ?? null,
+      userRatingsTotal: r.userRatingsTotal,
+      address: r.address,
+      linkedinUrl: linkedinSearchUrl(r, stad),
+    }));
+
+    try {
+      const res = await fetch("/api/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businesses }),
+      });
+
+      if (!res.ok || !res.body) {
+        let msg = `Verrijking mislukt (HTTP ${res.status}).`;
+        try {
+          const j = await res.json();
+          if (j?.error) msg = j.error;
+        } catch {
+          /* negeren */
+        }
+        setEnrichError(msg);
+        setEnriching(false);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+        for (const part of parts) {
+          const line = part.split("\n").find((l) => l.startsWith("data: "));
+          if (!line) continue;
+          let event: EnrichEvent;
+          try {
+            event = JSON.parse(line.slice(6)) as EnrichEvent;
+          } catch {
+            continue;
+          }
+          handleEnrichEvent(event);
+        }
+      }
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : "";
+      setEnrichError(
+        /failed to fetch|networkerror|load failed/i.test(raw)
+          ? "Kon de server niet bereiken. Draait de dev-server nog?"
+          : raw || "Onbekende fout tijdens de verrijking."
+      );
+    } finally {
+      setEnriching(false);
+    }
+  }
+
+  function handleEnrichEvent(event: EnrichEvent) {
+    switch (event.type) {
+      case "total":
+        setEnrichProgress((p) => ({ ...p, total: event.total }));
+        break;
+      case "progress":
+        setEnrichProgress({ done: event.done, total: event.total });
+        break;
+      case "result":
+        // Merge de verrijking in de bestaande rij op placeId.
+        setResults((prev) =>
+          prev.map((r) =>
+            r.placeId === event.placeId
+              ? { ...r, enrichment: event.enrichment }
+              : r
+          )
+        );
+        break;
+      case "error":
+        setEnrichError(event.message);
+        break;
+      case "done":
+        break;
+    }
+  }
+
+  async function copyMessage(placeId: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(placeId);
+      setTimeout(() => setCopiedId((c) => (c === placeId ? null : c)), 1500);
+    } catch {
+      /* clipboard geweigerd — stil negeren */
+    }
+  }
+
   const pct =
     progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
 
@@ -372,6 +513,27 @@ export default function Home() {
             <code className="rounded bg-navy-900 px-1">npm run dev</code>).
             Zonder Places-key kan er niet gescand worden; zonder PSI-key vallen
             de scores terug op een basis-beoordeling.
+          </p>
+        </div>
+      )}
+
+      {/* Info als de Anthropic-key ontbreekt (alleen de Claude-stap raakt dit). */}
+      {keyStatus && !keyStatus.anthropicKey && (
+        <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-200/90">
+          <p>
+            🤖 <code className="rounded bg-navy-900 px-1">ANTHROPIC_API_KEY</code>{" "}
+            is niet ingesteld — scannen werkt gewoon, maar &quot;Genereer
+            berichten met Claude&quot; pas nadat je de key in{" "}
+            <code className="rounded bg-navy-900 px-1">.env.local</code> zet (zie{" "}
+            <a
+              href="https://console.anthropic.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              console.anthropic.com
+            </a>
+            ) en de dev-server herstart.
           </p>
         </div>
       )}
@@ -478,6 +640,14 @@ export default function Home() {
             Gebruik ze om te prioriteren, niet om automatisch te selecteren.
           </p>
 
+          {/* AI-disclaimer over de Claude-stap. */}
+          <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200/90">
+            🤖 De benaderbaarheid-inschatting en het conceptbericht zijn
+            AI-gegenereerd op basis van beperkte scan-data. Claude kan hier niet
+            live zoeken, dus controleer omvang en situatie zelf voordat je
+            verstuurt. Behandel het bericht als concept, niet als verzendklaar.
+          </p>
+
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-semibold text-white">
               {sortedResults.length}
@@ -509,6 +679,27 @@ export default function Home() {
                 reviews
               </label>
 
+              {/* Filter: alleen door Claude benaderbaar bevonden leads. */}
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={onlyBenaderbaar}
+                  onChange={(e) => setOnlyBenaderbaar(e.target.checked)}
+                  className="h-4 w-4 accent-[#06b6d4]"
+                />
+                Alleen benaderbaar
+              </label>
+
+              <button
+                onClick={runEnrich}
+                disabled={enriching}
+                className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-navy-900 transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {enriching
+                  ? "Claude denkt na…"
+                  : "✨ Genereer berichten met Claude"}
+              </button>
+
               <button
                 onClick={handleDownload}
                 className="rounded-lg border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent transition hover:bg-accent/20"
@@ -517,6 +708,47 @@ export default function Home() {
               </button>
             </div>
           </div>
+
+          {/* Voortgang van de Claude-verrijking. */}
+          {enriching && (
+            <div className="mb-3">
+              <div className="mb-1 flex justify-between text-sm text-slate-400">
+                <span>
+                  {enrichProgress.done} / {enrichProgress.total || "?"}{" "}
+                  verwerkt door Claude
+                </span>
+                <span>
+                  {enrichProgress.total > 0
+                    ? Math.round(
+                        (enrichProgress.done / enrichProgress.total) * 100
+                      )
+                    : 0}
+                  %
+                </span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-navy-700">
+                <div
+                  className="h-full rounded-full bg-accent transition-all duration-300"
+                  style={{
+                    width: `${
+                      enrichProgress.total > 0
+                        ? Math.round(
+                            (enrichProgress.done / enrichProgress.total) * 100
+                          )
+                        : 0
+                    }%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Foutmelding van de Claude-stap. */}
+          {enrichError && (
+            <div className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+              {enrichError}
+            </div>
+          )}
 
           <div className="overflow-x-auto rounded-xl border border-navy-600">
             <table className="w-full border-collapse text-sm">
@@ -538,6 +770,8 @@ export default function Home() {
                   <th className="px-3 py-2 font-medium">Telefoon</th>
                   <th className="px-3 py-2 font-medium">Contactpagina</th>
                   <th className="px-3 py-2 font-medium">LinkedIn</th>
+                  <th className="px-3 py-2 font-medium">Let op</th>
+                  <th className="px-3 py-2 font-medium">Conceptbericht</th>
                 </tr>
               </thead>
               <tbody>
@@ -604,6 +838,24 @@ export default function Home() {
                     <ScoreCell value={r.assessment?.performance ?? null} />
                     <ScoreCell value={r.assessment?.seo ?? null} />
                     <ScoreCell value={r.assessment?.accessibility ?? null} />
+                    {/* Benaderbaar (AI-inschatting via Claude) */}
+                    <td className="px-3 py-2">
+                      {r.enrichment === undefined || r.enrichment === null ? (
+                        <span className="text-slate-600">—</span>
+                      ) : r.enrichment.error ? (
+                        <span className="whitespace-nowrap text-xs text-red-400">
+                          mislukt
+                        </span>
+                      ) : r.enrichment.benaderbaar ? (
+                        <span className="inline-block whitespace-nowrap rounded border border-green-500/30 bg-green-500/15 px-2 py-0.5 text-xs font-semibold text-green-400">
+                          ✓ ja
+                        </span>
+                      ) : (
+                        <span className="inline-block whitespace-nowrap rounded border border-slate-500/30 bg-slate-500/15 px-2 py-0.5 text-xs text-slate-400">
+                          nee
+                        </span>
+                      )}
+                    </td>
                     {/* Zwaktes */}
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap gap-1">
@@ -680,6 +932,46 @@ export default function Home() {
                       >
                         🔍 zoek
                       </a>
+                    </td>
+                    {/* Let op (twijfels van Claude) */}
+                    <td className="px-3 py-2 align-top text-xs text-slate-400">
+                      {r.enrichment?.error ? (
+                        <span className="text-red-400">kon niet verwerken</span>
+                      ) : r.enrichment?.twijfels ? (
+                        <span className="block max-w-[18rem]">
+                          {r.enrichment.twijfels}
+                        </span>
+                      ) : (
+                        <span className="text-slate-600">—</span>
+                      )}
+                    </td>
+                    {/* Conceptbericht + kopieerknop */}
+                    <td className="px-3 py-2 align-top">
+                      {r.enrichment && !r.enrichment.error ? (
+                        r.enrichment.bericht ? (
+                          <div className="max-w-[24rem]">
+                            <p className="mb-1 whitespace-pre-wrap text-xs text-slate-300">
+                              {r.enrichment.bericht}
+                            </p>
+                            <button
+                              onClick={() =>
+                                copyMessage(r.placeId, r.enrichment!.bericht)
+                              }
+                              className="rounded border border-accent/50 bg-accent/10 px-2 py-0.5 text-xs font-medium text-accent transition hover:bg-accent/20"
+                            >
+                              {copiedId === r.placeId
+                                ? "✓ gekopieerd"
+                                : "Kopieer"}
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-xs italic text-slate-500">
+                            {r.enrichment.reden || "geen bericht"}
+                          </span>
+                        )
+                      ) : (
+                        <span className="text-slate-600">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}

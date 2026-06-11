@@ -50,6 +50,8 @@ export interface LeadResult extends Business {
   contactPage: string | null;
   /** null = website wordt nog beoordeeld (komt later via een update-event). */
   assessment: Assessment | null;
+  /** AI-verrijking (Claude); undefined zolang niet aangevraagd. */
+  enrichment?: Enrichment | null;
 }
 
 /** Server-Sent-Events die de scan-route naar de frontend streamt. */
@@ -66,5 +68,40 @@ export type ScanEvent =
       contactPage: string | null;
       assessment: Assessment;
     }
+  | { type: "error"; message: string; fatal: boolean }
+  | { type: "done" };
+
+/**
+ * AI-gegenereerde inschatting + conceptbericht per bedrijf (via Claude).
+ * RUW: gebaseerd op beperkte scan-data, geen live-onderzoek. Behandel als hint.
+ */
+export interface Enrichment {
+  benaderbaar: boolean;
+  reden: string;
+  twijfels: string;
+  bericht: string;
+  /** Gezet als het bedrijf niet verwerkt kon worden (parse-/API-fout). */
+  error?: string;
+}
+
+/** Input die de frontend per bedrijf naar /api/enrich stuurt. */
+export interface EnrichInput {
+  placeId: string;
+  name: string;
+  website: string;
+  totaalscore: number | null;
+  zwaktes: string[];
+  phone: string;
+  email: string | null;
+  userRatingsTotal: number | null;
+  address: string;
+  linkedinUrl: string;
+}
+
+/** Server-Sent-Events die de enrich-route naar de frontend streamt. */
+export type EnrichEvent =
+  | { type: "total"; total: number }
+  | { type: "progress"; done: number; total: number }
+  | { type: "result"; placeId: string; enrichment: Enrichment }
   | { type: "error"; message: string; fatal: boolean }
   | { type: "done" };

@@ -9,5 +9,6 @@ export async function GET() {
   return Response.json({
     placesKey: !!process.env.GOOGLE_PLACES_KEY,
     psiKey: !!process.env.GOOGLE_PSI_KEY,
+    anthropicKey: !!process.env.ANTHROPIC_API_KEY,
   });
 }

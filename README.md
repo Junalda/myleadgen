@@ -41,9 +41,16 @@ npm install
    ```
    GOOGLE_PLACES_KEY=...
    GOOGLE_PSI_KEY=...
+   ANTHROPIC_API_KEY=...
    ```
 
 > `.env.local` staat in `.gitignore` en wordt nooit gecommit.
+
+De `ANTHROPIC_API_KEY` is alleen nodig voor de Claude-stap (lead-filtering +
+berichtgeneratie). Maak hem aan op
+[console.anthropic.com](https://console.anthropic.com) → **Settings → API
+Keys**. Zonder deze key werkt het scannen gewoon; alleen de knop *"Genereer
+berichten met Claude"* geeft dan een nette melding.
 
 ### Google API's activeren (Google Cloud Console)
 
@@ -117,9 +124,18 @@ de scan niet crashen — dat bedrijf wordt gemarkeerd en de scan gaat door.
   **niets van LinkedIn gescrapet of via hun API opgehaald** — het is puur een
   slimme zoeklink; het bedrijfsprofiel staat vrijwel altijd bovenaan de
   resultaten. De stad komt uit het adres (met de gezochte stad als fallback).
+- **Claude-stap ("Genereer berichten met Claude")**: stuurt de huidige
+  (gefilterde) lijst naar `/api/enrich`, waar **Claude** (`claude-sonnet-4-6`,
+  server-side) per bedrijf inschat of het een benaderbare lead is en — zo ja —
+  een kant-en-klaar LinkedIn-openingsbericht schrijft. Voegt drie kolommen toe:
+  **Benaderbaar** (groen ja / grijs nee), **Let op** (waar je zelf op moet
+  letten) en **Conceptbericht** (met een **Kopieer**-knop). Je kunt sorteren op
+  Benaderbaar en filteren op *"Alleen benaderbaar"*. Een voortgangsbalk toont
+  hoeveel bedrijven Claude al verwerkt heeft.
 - **Download CSV**: exporteert de huidige (gefilterde/gesorteerde) tabel met
-  UTF-8 BOM, zodat Excel Nederlandse tekens goed toont. De LinkedIn-zoeklink
-  staat ook als kolom in de CSV.
+  UTF-8 BOM, zodat Excel Nederlandse tekens goed toont. De LinkedIn-zoeklink én
+  de Claude-velden (Benaderbaar, Reden, Let op, Conceptbericht) staan ook als
+  kolommen in de CSV.
 
 > De B2B-richting stuur je zelf via je zoekterm (bv. *"facility schoonmaak
 > zakelijk"* i.p.v. *"schoonmaak"*) — daar is geen aparte instelling voor.
@@ -133,6 +149,10 @@ de scan niet crashen — dat bedrijf wordt gemarkeerd en de scan gaat door.
   "Mogelijk jong"-hint is afgeleid van het aantal reviews, niet van een
   oprichtingsdatum. Gebruik het om te prioriteren, niet om automatisch te
   selecteren.
+- **De Claude-inschatting en het conceptbericht zijn AI-gegenereerd** op basis
+  van beperkte scan-data. Claude kan hier niet live zoeken, dus controleer
+  omvang en situatie zelf (KvK/LinkedIn) voordat je iets verstuurt. Behandel het
+  bericht als concept, niet als verzendklaar.
 - Bedoeld voor **gerichte, warme B2B-benadering**, niet voor massale koude mail
   (denk aan AVG/GDPR).
 
