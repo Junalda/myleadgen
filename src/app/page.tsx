@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { LeadResult, ScanEvent } from "@/lib/types";
 import { downloadCsv } from "@/lib/csv";
+import { linkedinSearchUrl } from "@/lib/linkedin";
 
 // ---------------------------------------------------------------------------
 // Sorteer-configuratie
@@ -321,7 +322,8 @@ export default function Home() {
       s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "scan";
     downloadCsv(
       sortedResults,
-      `leads-${safe(branche)}-${safe(stad)}-${stamp}.csv`
+      `leads-${safe(branche)}-${safe(stad)}-${stamp}.csv`,
+      stad
     );
   }
 
@@ -535,6 +537,7 @@ export default function Home() {
                   <th className="px-3 py-2 font-medium">E-mail</th>
                   <th className="px-3 py-2 font-medium">Telefoon</th>
                   <th className="px-3 py-2 font-medium">Contactpagina</th>
+                  <th className="px-3 py-2 font-medium">LinkedIn</th>
                 </tr>
               </thead>
               <tbody>
@@ -665,6 +668,18 @@ export default function Home() {
                       ) : (
                         <span className="text-slate-600">—</span>
                       )}
+                    </td>
+                    {/* LinkedIn — Google-zoeklink (geen scraping) */}
+                    <td className="px-3 py-2">
+                      <a
+                        href={linkedinSearchUrl(r, stad)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Zoek dit bedrijf op LinkedIn via Google"
+                        className="text-accent hover:underline"
+                      >
+                        🔍 zoek
+                      </a>
                     </td>
                   </tr>
                 ))}

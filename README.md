@@ -112,8 +112,14 @@ de scan niet crashen — dat bedrijf wordt gemarkeerd en de scan gaat door.
 - **Filter "alleen weinig reviews"**: een checkbox boven de tabel met een
   instelbaar getal (default 10) om snel waarschijnlijk-jongere bedrijven te
   isoleren. Dit filtert client-side de getoonde rijen (en dus ook de CSV-export).
+- **Kolom "LinkedIn"**: een klikbare zoeklink (opent in nieuw tabblad) die een
+  Google-zoekopdracht `"{bedrijfsnaam}" {stad} site:linkedin.com` opent. Er wordt
+  **niets van LinkedIn gescrapet of via hun API opgehaald** — het is puur een
+  slimme zoeklink; het bedrijfsprofiel staat vrijwel altijd bovenaan de
+  resultaten. De stad komt uit het adres (met de gezochte stad als fallback).
 - **Download CSV**: exporteert de huidige (gefilterde/gesorteerde) tabel met
-  UTF-8 BOM, zodat Excel Nederlandse tekens goed toont.
+  UTF-8 BOM, zodat Excel Nederlandse tekens goed toont. De LinkedIn-zoeklink
+  staat ook als kolom in de CSV.
 
 > De B2B-richting stuur je zelf via je zoekterm (bv. *"facility schoonmaak
 > zakelijk"* i.p.v. *"schoonmaak"*) — daar is geen aparte instelling voor.

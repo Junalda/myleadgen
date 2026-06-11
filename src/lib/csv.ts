@@ -1,6 +1,7 @@
 // CSV-export van leadresultaten. UTF-8 BOM zodat Excel NL-tekens goed toont.
 
 import type { LeadResult } from "./types";
+import { linkedinSearchUrl } from "./linkedin";
 
 function escapeCell(value: string | number | null): string {
   const s = value === null || value === undefined ? "" : String(value);
@@ -26,10 +27,14 @@ const HEADERS = [
   "Toegankelijkheid",
   "Best practices",
   "Adres",
+  "LinkedIn (zoeklink)",
 ];
 
-/** Bouw een CSV-string uit de huidige (gefilterde/gesorteerde) resultaten. */
-export function buildCsv(rows: LeadResult[]): string {
+/**
+ * Bouw een CSV-string uit de huidige (gefilterde/gesorteerde) resultaten.
+ * `searchCity` (de gezochte stad) dient als fallback voor de LinkedIn-zoeklink.
+ */
+export function buildCsv(rows: LeadResult[], searchCity?: string): string {
   const lines: string[] = [];
   lines.push(HEADERS.map(escapeCell).join(","));
 
@@ -52,6 +57,7 @@ export function buildCsv(rows: LeadResult[]): string {
         escapeCell(a ? a.accessibility : ""),
         escapeCell(a ? a.bestPractices : ""),
         escapeCell(r.address),
+        escapeCell(linkedinSearchUrl(r, searchCity)),
       ].join(",")
     );
   }
@@ -61,8 +67,12 @@ export function buildCsv(rows: LeadResult[]): string {
 }
 
 /** Trigger een download van de CSV in de browser. */
-export function downloadCsv(rows: LeadResult[], filename: string): void {
-  const csv = buildCsv(rows);
+export function downloadCsv(
+  rows: LeadResult[],
+  filename: string,
+  searchCity?: string
+): void {
+  const csv = buildCsv(rows, searchCity);
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
