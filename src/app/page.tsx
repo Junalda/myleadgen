@@ -154,6 +154,7 @@ export default function Home() {
     placesKey: boolean;
     psiKey: boolean;
     anthropicKey: boolean;
+    anthropicKeyFormat: "missing" | "placeholder" | "unexpected_prefix" | "ok";
   } | null>(null);
 
   // Standaard sorteren op totaalscore oplopend (zwakste site bovenaan).
@@ -173,6 +174,7 @@ export default function Home() {
             placesKey: !!data.placesKey,
             psiKey: !!data.psiKey,
             anthropicKey: !!data.anthropicKey,
+            anthropicKeyFormat: data.anthropicKeyFormat ?? "missing",
           });
         }
       })
@@ -517,14 +519,22 @@ export default function Home() {
         </div>
       )}
 
-      {/* Info als de Anthropic-key ontbreekt (alleen de Claude-stap raakt dit). */}
-      {keyStatus && !keyStatus.anthropicKey && (
+      {/* Info over de Anthropic-key (alleen de Claude-stap raakt dit). */}
+      {keyStatus && keyStatus.anthropicKeyFormat !== "ok" && (
         <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-200/90">
           <p>
             🤖 <code className="rounded bg-navy-900 px-1">ANTHROPIC_API_KEY</code>{" "}
-            is niet ingesteld — scannen werkt gewoon, maar &quot;Genereer
-            berichten met Claude&quot; pas nadat je de key in{" "}
-            <code className="rounded bg-navy-900 px-1">.env.local</code> zet (zie{" "}
+            {keyStatus.anthropicKeyFormat === "missing" &&
+              "is niet ingesteld."}
+            {keyStatus.anthropicKeyFormat === "placeholder" &&
+              "is nog de voorbeeld-placeholder uit .env.example — vervang hem door je echte key."}
+            {keyStatus.anthropicKeyFormat === "unexpected_prefix" &&
+              "begint niet met 'sk-ant-' — controleer of je de volledige, juiste key plakte (zonder quotes of spaties)."}{" "}
+            Scannen werkt gewoon; &quot;Genereer berichten met Claude&quot; werkt
+            pas met een geldige key in{" "}
+            <code className="rounded bg-navy-900 px-1">.env.local</code> (lokaal,
+            daarna dev-server herstarten) of in je Vercel Environment Variables.
+            Nieuwe key:{" "}
             <a
               href="https://console.anthropic.com"
               target="_blank"
@@ -533,7 +543,7 @@ export default function Home() {
             >
               console.anthropic.com
             </a>
-            ) en de dev-server herstart.
+            .
           </p>
         </div>
       )}

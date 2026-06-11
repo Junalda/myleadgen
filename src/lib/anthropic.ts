@@ -34,6 +34,23 @@ export function hasAnthropicKey(): boolean {
   return !!process.env.ANTHROPIC_API_KEY;
 }
 
+/**
+ * Veilige diagnose van de geladen key — lekt GEEN keytekens. Helpt de gebruiker
+ * onderscheiden tussen "geen key", "placeholder", "verkeerd formaat" en
+ * "ziet er goed uit maar wordt toch geweigerd" (= ingetrokken/verkeerd account).
+ */
+export function anthropicKeyFormat():
+  | "missing"
+  | "placeholder"
+  | "unexpected_prefix"
+  | "ok" {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return "missing";
+  if (/your-|placeholder|xxxx/i.test(key)) return "placeholder";
+  if (!key.startsWith("sk-ant-")) return "unexpected_prefix";
+  return "ok";
+}
+
 // System-prompt: letterlijk overgenomen uit de opdracht.
 const SYSTEM_PROMPT = `Je bent een sales-assistent voor een Nederlands webbureau (Webmaister) dat premium websites + groeistrategie verkoopt voor ~€2.700 aan kleine, zelfstandige dienstverleners. De ideale klant is een ZELFSTANDIG bedrijf van grofweg 3-30 medewerkers met groeiambitie en betaalbereidheid — niet een eenpitter (te klein voor de prijs) en niet een groot concern of onderdeel van een keten (onbereikbaar / heeft eigen marketing). Sterke koopsignalen: betaalt al voor leads (bv. Werkspot), recent opgericht/in groei, zwakke of verouderde website terwijl het bedrijf gevestigd oogt. Referentieklant om te noemen: NursiTree (boom/groen voor gemeenten).
 
@@ -112,16 +129,30 @@ export async function enrichLead(input: EnrichInput): Promise<Enrichment> {
       messages: [{ role: "user", content: buildUserMessage(input) }],
     });
   } catch (err) {
-    // Auth/permissie/ontbrekende key zijn fataal voor de hele run.
-    if (
-      err instanceof Anthropic.AuthenticationError ||
-      err instanceof Anthropic.PermissionDeniedError
-    ) {
+    // Auth/permissie/ontbrekende key zijn fataal voor de hele run. We tonen
+    // een schone, actiegerichte melding (niet de rauwe JSON van de SDK).
+    if (err instanceof Anthropic.AuthenticationError) {
       throw new AnthropicFatalError(
-        `Anthropic-fout (${err.status}): controleer je ANTHROPIC_API_KEY. ${err.message}`
+        "Ongeldige Anthropic API-key (401: invalid x-api-key). Controleer " +
+          "ANTHROPIC_API_KEY in .env.local (lokaal) of in je Vercel " +
+          "Environment Variables — zonder quotes/spaties, beginnend met " +
+          "'sk-ant-' — en herstart de dev-server of redeploy. Maak desnoods " +
+          "een nieuwe key aan op console.anthropic.com."
       );
     }
-    // Overige API-fouten (rate limit na retries, server) → per bedrijf falen.
+    if (err instanceof Anthropic.PermissionDeniedError) {
+      throw new AnthropicFatalError(
+        "Geen toegang met deze Anthropic-key (403). Controleer of de key " +
+          "rechten heeft voor dit model en of er voldoende krediet/quota is."
+      );
+    }
+    if (err instanceof Anthropic.RateLimitError) {
+      throw new AnthropicFatalError(
+        "Anthropic rate limit bereikt (429). Probeer het over even opnieuw " +
+          "of verlaag het aantal bedrijven."
+      );
+    }
+    // Overige API-fouten → per bedrijf falen (aanroeper markeert + gaat door).
     const msg = err instanceof Error ? err.message : "onbekende API-fout";
     throw new Error(msg);
   }
