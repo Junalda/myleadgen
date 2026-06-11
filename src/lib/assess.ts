@@ -91,9 +91,10 @@ async function psiScores(website: string): Promise<PsiScores> {
     params.append("category", c);
   }
 
-  // PSI is traag; ruime timeout.
+  // PSI is traag, maar een te ruime timeout laat één hangende call de hele
+  // scan ophouden (en op Vercel de functie over de tijdslimiet duwen).
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 60000);
+  const timer = setTimeout(() => controller.abort(), 25000);
   try {
     const res = await fetch(`${PSI_URL}?${params.toString()}`, {
       signal: controller.signal,

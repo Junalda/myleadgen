@@ -48,13 +48,23 @@ export interface Assessment {
 export interface LeadResult extends Business {
   emails: string[];
   contactPage: string | null;
-  assessment: Assessment;
+  /** null = website wordt nog beoordeeld (komt later via een update-event). */
+  assessment: Assessment | null;
 }
 
 /** Server-Sent-Events die de scan-route naar de frontend streamt. */
 export type ScanEvent =
   | { type: "total"; total: number }
   | { type: "progress"; done: number; total: number }
+  // Lead verschijnt direct (Places-data); assessment kan nog null zijn.
   | { type: "result"; result: LeadResult }
+  // Verrijking achteraf: contact + websitebeoordeling per bedrijf.
+  | {
+      type: "update";
+      placeId: string;
+      emails: string[];
+      contactPage: string | null;
+      assessment: Assessment;
+    }
   | { type: "error"; message: string; fatal: boolean }
   | { type: "done" };
