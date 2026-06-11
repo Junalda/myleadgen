@@ -28,7 +28,19 @@ const HEADERS = [
   "Best practices",
   "Adres",
   "LinkedIn (zoeklink)",
+  "Benaderbaar (AI)",
+  "Reden (AI)",
+  "Let op (AI)",
+  "Conceptbericht (AI)",
 ];
+
+/** Leesbare waarde voor de "Benaderbaar"-CSV-kolom. */
+function benaderbaarCell(r: LeadResult): string {
+  const e = r.enrichment;
+  if (!e) return "";
+  if (e.error) return "mislukt";
+  return e.benaderbaar ? "ja" : "nee";
+}
 
 /**
  * Bouw een CSV-string uit de huidige (gefilterde/gesorteerde) resultaten.
@@ -58,6 +70,14 @@ export function buildCsv(rows: LeadResult[], searchCity?: string): string {
         escapeCell(a ? a.bestPractices : ""),
         escapeCell(r.address),
         escapeCell(linkedinSearchUrl(r, searchCity)),
+        escapeCell(benaderbaarCell(r)),
+        escapeCell(r.enrichment && !r.enrichment.error ? r.enrichment.reden : ""),
+        escapeCell(
+          r.enrichment && !r.enrichment.error ? r.enrichment.twijfels : ""
+        ),
+        escapeCell(
+          r.enrichment && !r.enrichment.error ? r.enrichment.bericht : ""
+        ),
       ].join(",")
     );
   }
