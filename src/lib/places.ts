@@ -41,41 +41,70 @@ async function findPlaceIds(
   const key = placesKey();
   const query = `${branche} in ${stad}`;
   const ids: string[] = [];
-  let pageToken: string | undefined;
 
-  // Google levert ~20 resultaten per pagina, max 3 pagina's (60 totaal).
-  for (let page = 0; page < 3 && ids.length < max; page++) {
-    const params = new URLSearchParams({ query, language: "nl", key });
-    if (pageToken) params.set("pagetoken", pageToken);
+  // --- Eerste pagina ---
+  // Fouten op de eerste pagina zijn wél fataal (key/quota/malformed query):
+  // die wil je duidelijk gemeld zien.
+  const firstParams = new URLSearchParams({ query, language: "nl", key });
+  const firstRes = await fetch(`${TEXTSEARCH_URL}?${firstParams.toString()}`);
+  const first = (await firstRes.json()) as TextSearchResponse;
 
-    const res = await fetch(`${TEXTSEARCH_URL}?${params.toString()}`);
-    const data = (await res.json()) as TextSearchResponse;
+  if (first.status === "REQUEST_DENIED" || first.status === "INVALID_REQUEST") {
+    throw new GoogleApiError(
+      `Google Places fout: ${first.status}${
+        first.error_message ? ` — ${first.error_message}` : ""
+      }`
+    );
+  }
+  if (first.status === "OVER_QUERY_LIMIT") {
+    throw new GoogleApiError(
+      "Google Places quota overschreden (OVER_QUERY_LIMIT)."
+    );
+  }
 
-    if (data.status === "REQUEST_DENIED" || data.status === "INVALID_REQUEST") {
-      throw new GoogleApiError(
-        `Google Places fout: ${data.status}${
-          data.error_message ? ` — ${data.error_message}` : ""
-        }`
-      );
-    }
-    if (data.status === "OVER_QUERY_LIMIT") {
-      throw new GoogleApiError(
-        "Google Places quota overschreden (OVER_QUERY_LIMIT)."
-      );
-    }
+  for (const r of first.results ?? []) {
+    if (ids.length >= max) break;
+    ids.push(r.place_id);
+  }
 
-    for (const r of data.results ?? []) {
+  // --- Vervolgpagina's (best effort, NOOIT fataal) ---
+  // next_page_token heeft tijd nodig om geldig te worden, en op veel nieuwere
+  // Google-projecten werkt de legacy-paginering helemaal niet meer (blijft
+  // INVALID_REQUEST geven). Dat mag de scan niet laten falen: lukt een
+  // vervolgpagina niet, dan stoppen we netjes met wat we al hebben.
+  let pageToken = first.next_page_token;
+  for (let page = 1; page < 3 && pageToken && ids.length < max; page++) {
+    const next = await fetchNextPage(pageToken, key);
+    if (!next || next.status !== "OK") break; // paginering niet beschikbaar → stop
+    for (const r of next.results ?? []) {
       if (ids.length >= max) break;
       ids.push(r.place_id);
     }
-
-    if (!data.next_page_token || ids.length >= max) break;
-    pageToken = data.next_page_token;
-    // next_page_token wordt pas na een korte vertraging geldig.
-    await sleep(2000);
+    pageToken = next.next_page_token;
   }
 
   return ids;
+}
+
+/**
+ * Haal een vervolgpagina op via next_page_token, met backoff-retries omdat het
+ * token soms pas na een paar seconden geldig wordt. Geeft `null` terug als het
+ * na de retries nog steeds niet lukt — de aanroeper stopt dan netjes met
+ * pagineren (gooit dus géén fout).
+ */
+async function fetchNextPage(
+  token: string,
+  key: string
+): Promise<TextSearchResponse | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await sleep(2000 + attempt * 1000); // 2s, 3s, 4s
+    const params = new URLSearchParams({ pagetoken: token, key });
+    const res = await fetch(`${TEXTSEARCH_URL}?${params.toString()}`);
+    const data = (await res.json()) as TextSearchResponse;
+    // Token nog niet geldig → opnieuw proberen. Andere status → teruggeven.
+    if (data.status !== "INVALID_REQUEST") return data;
+  }
+  return null;
 }
 
 interface DetailsResponse {
